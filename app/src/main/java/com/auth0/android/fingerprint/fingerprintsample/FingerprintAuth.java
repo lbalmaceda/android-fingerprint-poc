@@ -152,7 +152,7 @@ public class FingerprintAuth extends FingerprintManagerCompat.AuthenticationCall
             String encryptedSecret = new String(encrypted);
             sharedPreferences.edit().putString(ENCRYPTED_PREFIX + alias, encryptedSecret).apply();
         } catch (BadPaddingException | IllegalBlockSizeException e) {
-            Log.e(TAG, "Failed to encrypt the data with the generated key." + e.getMessage());
+            Log.e(TAG, "Failed to encrypt the data with the generated key.", e);
         }
     }
 
@@ -167,7 +167,7 @@ public class FingerprintAuth extends FingerprintManagerCompat.AuthenticationCall
             byte[] decrypted = cipher.doFinal(encryptedSecret.getBytes());
             return new String(decrypted);
         } catch (BadPaddingException | IllegalBlockSizeException e) {
-            Log.e(TAG, "Failed to decrypt the data with the generated key." + e.getMessage());
+            Log.e(TAG, "Failed to decrypt the data with the generated key", e);
         }
         return null;
     }
