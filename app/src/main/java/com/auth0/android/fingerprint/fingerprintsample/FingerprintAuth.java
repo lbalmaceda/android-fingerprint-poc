@@ -23,7 +23,6 @@ import java.security.NoSuchAlgorithmException;
 import java.security.NoSuchProviderException;
 import java.security.UnrecoverableKeyException;
 import java.security.cert.CertificateException;
-import java.security.spec.MGF1ParameterSpec;
 
 import javax.crypto.BadPaddingException;
 import javax.crypto.Cipher;
@@ -31,8 +30,6 @@ import javax.crypto.IllegalBlockSizeException;
 import javax.crypto.KeyGenerator;
 import javax.crypto.NoSuchPaddingException;
 import javax.crypto.SecretKey;
-import javax.crypto.spec.OAEPParameterSpec;
-import javax.crypto.spec.PSource;
 
 /**
  * Created by lbalmaceda on 4/17/17.
@@ -102,13 +99,11 @@ public class FingerprintAuth extends FingerprintManagerCompat.AuthenticationCall
         }
     }
 
-
     private boolean initCipher(int operationMode) {
         try {
             keyStore.load(null);
             SecretKey key = (SecretKey) keyStore.getKey(alias, null);
-            OAEPParameterSpec spec = new OAEPParameterSpec(KeyProperties.DIGEST_SHA256, "MGF1", MGF1ParameterSpec.SHA1, PSource.PSpecified.DEFAULT);
-            cipher.init(operationMode, key, spec);
+            cipher.init(operationMode, key, cipher.getParameters());
             return true;
         } catch (KeyPermanentlyInvalidatedException e) {
             return false;
