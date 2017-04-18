@@ -32,9 +32,11 @@ import java.security.interfaces.RSAPublicKey;
 import java.security.spec.RSAKeyGenParameterSpec;
 import java.util.ArrayList;
 
+import javax.crypto.BadPaddingException;
 import javax.crypto.Cipher;
 import javax.crypto.CipherInputStream;
 import javax.crypto.CipherOutputStream;
+import javax.crypto.IllegalBlockSizeException;
 import javax.crypto.NoSuchPaddingException;
 
 /**
@@ -165,10 +167,10 @@ public class FingerprintAuth extends FingerprintManagerCompat.AuthenticationCall
     private void encrypt(@NonNull String secret) {
         initCipher(Cipher.ENCRYPT_MODE);
         try {
-            byte[] encrypted = encryptData(cipher, secret.getBytes());
+            byte[] encrypted = cipher.doFinal(secret.getBytes());
             String encryptedSecret = Base64.encodeToString(encrypted, Base64.DEFAULT);
             sharedPreferences.edit().putString(ENCRYPTED_PREFIX + alias, encryptedSecret).apply();
-        } catch (IOException e) {
+        } catch (BadPaddingException | IllegalBlockSizeException e) {
             Log.e(TAG, "Failed to encrypt the data with the generated key.", e);
         }
     }
@@ -181,44 +183,12 @@ public class FingerprintAuth extends FingerprintManagerCompat.AuthenticationCall
             if (encryptedSecret == null) {
                 return null;
             }
-            byte[] decrypted = decryptData(cipher, encryptedSecret);
+            byte[] decrypted = cipher.doFinal(encryptedSecret);
             return new String(decrypted);
-        } catch (IOException e) {
+        } catch (BadPaddingException | IllegalBlockSizeException e) {
             Log.e(TAG, "Failed to decrypt the data with the generated key", e);
         }
         return null;
-    }
-
-    public byte[] encryptData(Cipher cipher, byte[] data) throws IOException {
-        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-        CipherOutputStream cipherOutputStream = new CipherOutputStream(outputStream, cipher);
-        cipherOutputStream.write(data);
-        cipherOutputStream.close();
-
-        byte[] encryptedData = outputStream.toByteArray();
-        outputStream.close();
-
-        return encryptedData;
-    }
-
-    public byte[] decryptData(Cipher cipher, byte[] encryptedData) throws IOException {
-        ByteArrayInputStream inputStream = new ByteArrayInputStream(encryptedData);
-        CipherInputStream cipherInputStream = new CipherInputStream(inputStream, cipher);
-        ArrayList<Byte> values = new ArrayList<>();
-        int nextByte;
-        while ((nextByte = cipherInputStream.read()) != -1) {
-            values.add((byte) nextByte);
-        }
-
-        cipherInputStream.close();
-        inputStream.close();
-
-        byte[] data = new byte[values.size()];
-        for (int i = 0; i < data.length; i++) {
-            data[i] = values.get(i);
-        }
-
-        return data;
     }
 
     @Override
