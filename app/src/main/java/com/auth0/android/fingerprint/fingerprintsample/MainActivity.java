@@ -41,6 +41,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                 Toast.makeText(this, "Registered!", Toast.LENGTH_SHORT).show();
                 break;
             case R.id.buttonDecrypt:
+                updateSensorStatus(true);
                 fingerprintAuth.authenticate();
                 break;
         }
