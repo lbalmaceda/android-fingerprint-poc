@@ -12,24 +12,30 @@ import android.support.annotation.Nullable;
 import android.support.annotation.RequiresApi;
 import android.support.v4.hardware.fingerprint.FingerprintManagerCompat;
 import android.support.v4.os.CancellationSignal;
+import android.util.Base64;
 import android.util.Log;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.InvalidKeyException;
+import java.security.KeyPairGenerator;
 import java.security.KeyStore;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
 import java.security.NoSuchProviderException;
-import java.security.UnrecoverableKeyException;
+import java.security.PrivateKey;
+import java.security.UnrecoverableEntryException;
 import java.security.cert.CertificateException;
+import java.security.interfaces.RSAPublicKey;
+import java.security.spec.RSAKeyGenParameterSpec;
+import java.util.ArrayList;
 
-import javax.crypto.BadPaddingException;
 import javax.crypto.Cipher;
-import javax.crypto.IllegalBlockSizeException;
-import javax.crypto.KeyGenerator;
+import javax.crypto.CipherInputStream;
+import javax.crypto.CipherOutputStream;
 import javax.crypto.NoSuchPaddingException;
-import javax.crypto.SecretKey;
 
 /**
  * Created by lbalmaceda on 4/17/17.
@@ -37,10 +43,16 @@ import javax.crypto.SecretKey;
 
 @RequiresApi(api = Build.VERSION_CODES.M)
 public class FingerprintAuth extends FingerprintManagerCompat.AuthenticationCallback {
+
     private static final String TAG = FingerprintAuth.class.getSimpleName();
+
     private static final String SHARED_PREFERENCES_NAME = "SECRET_STORAGE";
     private static final String ENCRYPTED_PREFIX = "encrypted_";
-    private static final String DEFAULT_ALIAS = "secret";
+    private static final String DEFAULT_ALIAS = "key-alias";
+
+    private static final String ANDROID_KEY_STORE = "AndroidKeyStore";
+    private static final String CIPHER_TRANSFORMATION = "RSA/ECB/PKCS1Padding";
+    private static final int KEY_SIZE = 512;
 
     private final String alias;
     private final FingerprintManagerCompat fingerprintManager;
@@ -49,7 +61,7 @@ public class FingerprintAuth extends FingerprintManagerCompat.AuthenticationCall
     private final Callback callback;
 
     private KeyStore keyStore;
-    private KeyGenerator keyGenerator;
+    private KeyPairGenerator keyPairGenerator;
     private Cipher cipher;
     private CancellationSignal cancellationSignal;
 
@@ -84,16 +96,14 @@ public class FingerprintAuth extends FingerprintManagerCompat.AuthenticationCall
             e.printStackTrace();
         }
         try {
-            keyGenerator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore");
+            keyPairGenerator = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_RSA, ANDROID_KEY_STORE);
         } catch (NoSuchAlgorithmException | NoSuchProviderException e) {
             e.printStackTrace();
             throw new RuntimeException("Failed to instantiate the KeyGenerator", e);
         }
 
         try {
-            cipher = Cipher.getInstance(KeyProperties.KEY_ALGORITHM_AES + "/"
-                    + KeyProperties.BLOCK_MODE_CBC + "/"
-                    + KeyProperties.ENCRYPTION_PADDING_PKCS7);
+            cipher = Cipher.getInstance(CIPHER_TRANSFORMATION);
         } catch (NoSuchAlgorithmException | NoSuchPaddingException e) {
             throw new RuntimeException("Failed to get an instance of Cipher", e);
         }
@@ -102,13 +112,19 @@ public class FingerprintAuth extends FingerprintManagerCompat.AuthenticationCall
     private boolean initCipher(int operationMode) {
         try {
             keyStore.load(null);
-            SecretKey key = (SecretKey) keyStore.getKey(alias, null);
-            cipher.init(operationMode, key, cipher.getParameters());
+            if (operationMode == Cipher.ENCRYPT_MODE) {
+                KeyStore.PrivateKeyEntry privateKeyEntry = (KeyStore.PrivateKeyEntry) keyStore.getEntry(alias, null);
+                RSAPublicKey publicKey = (RSAPublicKey) privateKeyEntry.getCertificate().getPublicKey();
+                cipher.init(Cipher.ENCRYPT_MODE, publicKey);
+            } else {
+                PrivateKey key = (PrivateKey) keyStore.getKey(alias, null);
+                cipher.init(Cipher.DECRYPT_MODE, key);
+            }
             return true;
         } catch (KeyPermanentlyInvalidatedException e) {
             return false;
-        } catch (KeyStoreException | CertificateException | UnrecoverableKeyException | IOException
-                | NoSuchAlgorithmException | InvalidKeyException | InvalidAlgorithmParameterException e) {
+        } catch (KeyStoreException | CertificateException | UnrecoverableEntryException | IOException
+                | NoSuchAlgorithmException | InvalidKeyException e) {
             throw new RuntimeException("Failed to setup Cipher", e);
         }
     }
@@ -119,15 +135,15 @@ public class FingerprintAuth extends FingerprintManagerCompat.AuthenticationCall
         // enrolled fingerprints has changed.
         try {
             keyStore.load(null);
+
             // Set the alias of the entry in Android KeyStore where the key will appear
             // and the constrains (purposes) in the constructor of the Builder
-
             KeyGenParameterSpec.Builder builder = new KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
-                    .setBlockModes(KeyProperties.BLOCK_MODE_CBC)
-                    // Require the user to authenticate with a fingerprint to authorize every use
-                    // of the key
-                    .setUserAuthenticationRequired(true)
-                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_PKCS7);
+                    .setAlgorithmParameterSpec(new RSAKeyGenParameterSpec(KEY_SIZE, RSAKeyGenParameterSpec.F4))
+                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_RSA_PKCS1)
+                    // Require the user to authenticate with a fingerprint to authorize
+                    // every use of the private key
+                    .setUserAuthenticationRequired(true);
 
             // This is a workaround to avoid crashes on devices whose API level is < 24
             // because KeyGenParameterSpec.Builder#setInvalidatedByBiometricEnrollment is only
@@ -137,8 +153,9 @@ public class FingerprintAuth extends FingerprintManagerCompat.AuthenticationCall
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 builder.setInvalidatedByBiometricEnrollment(invalidateOnBiometricEnrollment);
             }
-            keyGenerator.init(builder.build());
-            keyGenerator.generateKey();
+
+            keyPairGenerator.initialize(builder.build());
+            keyPairGenerator.generateKeyPair();
         } catch (NoSuchAlgorithmException | InvalidAlgorithmParameterException
                 | CertificateException | IOException e) {
             throw new RuntimeException(e);
@@ -148,28 +165,60 @@ public class FingerprintAuth extends FingerprintManagerCompat.AuthenticationCall
     private void encrypt(@NonNull String secret) {
         initCipher(Cipher.ENCRYPT_MODE);
         try {
-            byte[] encrypted = cipher.doFinal(secret.getBytes());
-            String encryptedSecret = new String(encrypted);
+            byte[] encrypted = encryptData(cipher, secret.getBytes());
+            String encryptedSecret = Base64.encodeToString(encrypted, Base64.DEFAULT);
             sharedPreferences.edit().putString(ENCRYPTED_PREFIX + alias, encryptedSecret).apply();
-        } catch (BadPaddingException | IllegalBlockSizeException e) {
+        } catch (IOException e) {
             Log.e(TAG, "Failed to encrypt the data with the generated key.", e);
         }
     }
 
     @Nullable
     private String decrypt(@NonNull Cipher cipher) {
-        initCipher(Cipher.DECRYPT_MODE);
         try {
-            final String encryptedSecret = sharedPreferences.getString(ENCRYPTED_PREFIX + alias, null);
+            final String base64encryptedSecret = sharedPreferences.getString(ENCRYPTED_PREFIX + alias, null);
+            final byte[] encryptedSecret = Base64.decode(base64encryptedSecret, Base64.DEFAULT);
             if (encryptedSecret == null) {
                 return null;
             }
-            byte[] decrypted = cipher.doFinal(encryptedSecret.getBytes());
+            byte[] decrypted = decryptData(cipher, encryptedSecret);
             return new String(decrypted);
-        } catch (BadPaddingException | IllegalBlockSizeException e) {
+        } catch (IOException e) {
             Log.e(TAG, "Failed to decrypt the data with the generated key", e);
         }
         return null;
+    }
+
+    public byte[] encryptData(Cipher cipher, byte[] data) throws IOException {
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+        CipherOutputStream cipherOutputStream = new CipherOutputStream(outputStream, cipher);
+        cipherOutputStream.write(data);
+        cipherOutputStream.close();
+
+        byte[] encryptedData = outputStream.toByteArray();
+        outputStream.close();
+
+        return encryptedData;
+    }
+
+    public byte[] decryptData(Cipher cipher, byte[] encryptedData) throws IOException {
+        ByteArrayInputStream inputStream = new ByteArrayInputStream(encryptedData);
+        CipherInputStream cipherInputStream = new CipherInputStream(inputStream, cipher);
+        ArrayList<Byte> values = new ArrayList<>();
+        int nextByte;
+        while ((nextByte = cipherInputStream.read()) != -1) {
+            values.add((byte) nextByte);
+        }
+
+        cipherInputStream.close();
+        inputStream.close();
+
+        byte[] data = new byte[values.size()];
+        for (int i = 0; i < data.length; i++) {
+            data[i] = values.get(i);
+        }
+
+        return data;
     }
 
     @Override
