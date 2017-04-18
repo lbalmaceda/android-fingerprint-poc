@@ -15,8 +15,6 @@ import android.support.v4.os.CancellationSignal;
 import android.util.Base64;
 import android.util.Log;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.InvalidKeyException;
@@ -30,12 +28,9 @@ import java.security.UnrecoverableEntryException;
 import java.security.cert.CertificateException;
 import java.security.interfaces.RSAPublicKey;
 import java.security.spec.RSAKeyGenParameterSpec;
-import java.util.ArrayList;
 
 import javax.crypto.BadPaddingException;
 import javax.crypto.Cipher;
-import javax.crypto.CipherInputStream;
-import javax.crypto.CipherOutputStream;
 import javax.crypto.IllegalBlockSizeException;
 import javax.crypto.NoSuchPaddingException;
 
@@ -114,6 +109,9 @@ public class FingerprintAuth extends FingerprintManagerCompat.AuthenticationCall
     private boolean initCipher(int operationMode) {
         try {
             keyStore.load(null);
+            if (!keyStore.containsAlias(alias)) {
+                return false;
+            }
             if (operationMode == Cipher.ENCRYPT_MODE) {
                 KeyStore.PrivateKeyEntry privateKeyEntry = (KeyStore.PrivateKeyEntry) keyStore.getEntry(alias, null);
                 RSAPublicKey publicKey = (RSAPublicKey) privateKeyEntry.getCertificate().getPublicKey();
@@ -200,6 +198,7 @@ public class FingerprintAuth extends FingerprintManagerCompat.AuthenticationCall
     @Override
     public void onAuthenticationSucceeded(FingerprintManagerCompat.AuthenticationResult result) {
         super.onAuthenticationSucceeded(result);
+        cancellationSignal = null;
         String secret = decrypt(result.getCryptoObject().getCipher());
         callback.onAuthenticated(secret);
     }
@@ -223,6 +222,10 @@ public class FingerprintAuth extends FingerprintManagerCompat.AuthenticationCall
     }
 
     public void authenticate() {
+        if (!initCipher(Cipher.DECRYPT_MODE)) {
+            callback.onError(new FingerprintAuthException("The secret has never been set!"));
+            return;
+        }
         initCipher(Cipher.DECRYPT_MODE);
         cancellationSignal = new CancellationSignal();
         fingerprintManager.authenticate(new FingerprintManagerCompat.CryptoObject(cipher), 0, cancellationSignal, this, null);
@@ -239,9 +242,7 @@ public class FingerprintAuth extends FingerprintManagerCompat.AuthenticationCall
         if (cancellationSignal != null) {
             cancellationSignal.cancel();
             cancellationSignal = null;
-            if (callback != null) {
-                callback.onCanceled();
-            }
+            callback.onCanceled();
         }
     }
 
